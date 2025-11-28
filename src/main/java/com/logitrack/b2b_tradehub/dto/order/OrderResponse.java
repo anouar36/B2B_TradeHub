@@ -15,7 +15,6 @@ public class OrderResponse {
     private CustomerTier clientTierAtOrder;
 
     // --- Calculated Totals ---
-    // المابر سيقوم بربط هذه الحقول مع حقول الـ HT في الـ Entity
     private BigDecimal sousTotal;
     private BigDecimal montantRemise;
     private BigDecimal montantHTApresRemise;
@@ -26,7 +25,7 @@ public class OrderResponse {
 
     // --- Status and Dates ---
     private OrderStatus status;
-    private String codePromo; // سيتم ربطه مع promoCodeId
+    private String codePromo;
     private LocalDateTime dateCommande;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

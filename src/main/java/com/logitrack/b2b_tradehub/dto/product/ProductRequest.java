@@ -1,4 +1,4 @@
-package com.logitrack.b2b_tradehub.dto.produc;
+package com.logitrack.b2b_tradehub.dto.product;
 
 import jakarta.validation.constraints.*;
 import lombok.Data;
