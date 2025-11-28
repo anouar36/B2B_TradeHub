@@ -3,14 +3,11 @@ package com.logitrack.b2b_tradehub.service;
 import com.logitrack.b2b_tradehub.dto.order.OrderCreateRequest;
 import com.logitrack.b2b_tradehub.dto.order.OrderResponse;
 import com.logitrack.b2b_tradehub.dto.orderItem.OrderItemRequest;
-import com.logitrack.b2b_tradehub.dto.orderItem.OrderItemResponse;
-import com.logitrack.b2b_tradehub.entity.Client;
-import com.logitrack.b2b_tradehub.entity.Order;
-import com.logitrack.b2b_tradehub.entity.OrderItem;
-import com.logitrack.b2b_tradehub.entity.Product;
+import com.logitrack.b2b_tradehub.entity.*;
 import com.logitrack.b2b_tradehub.entity.enums.OrderStatus;
 import com.logitrack.b2b_tradehub.exception.BusinessValidationException;
 import com.logitrack.b2b_tradehub.exception.ResourceNotFoundException;
+import com.logitrack.b2b_tradehub.mapper.OrderMapper;
 import com.logitrack.b2b_tradehub.repository.ClientRepository;
 import com.logitrack.b2b_tradehub.repository.OrderRepository;
 import com.logitrack.b2b_tradehub.repository.ProductRepository;
@@ -32,163 +29,190 @@ public class OrderService {
     private final ClientRepository clientRepository;
     private final ProductRepository productRepository;
     private final OrderItemService orderItemService;
+    private final ClientService clientService; // For updating loyalty
+    private final ProductService productService; // For stock management
+    private final PromoCodeService promoCodeService; // For discount calculation
+    private final OrderMapper orderMapper;
 
-    // --- READ OPERATIONS (Return DTOs) ---
+    // --- READ OPERATIONS ---
 
     @Transactional(readOnly = true)
     public List<OrderResponse> findAll() {
-        return orderRepository.findAll().stream()
-                .map(this::mapToResponse)
-                .collect(Collectors.toList());
+        return orderRepository.findAll().stream().map(orderMapper::toResponse).collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)
     public OrderResponse findById(Long id) {
-        Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found with ID: " + id));
-        return mapToResponse(order);
+        return orderMapper.toResponse(findOrderEntityById(id));
     }
 
     @Transactional(readOnly = true)
     public List<OrderResponse> findByStatus(OrderStatus status) {
-        return orderRepository.findByStatus(status).stream()
-                .map(this::mapToResponse)
-                .collect(Collectors.toList());
+        return orderRepository.findByStatus(status).stream().map(orderMapper::toResponse).collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)
     public List<OrderResponse> findPendingOrders() {
-        return orderRepository.findByStatus(OrderStatus.PENDING).stream()
-                .map(this::mapToResponse)
-                .collect(Collectors.toList());
+        return findByStatus(OrderStatus.PENDING);
     }
 
     @Transactional(readOnly = true)
     public List<OrderResponse> findByDateRange(LocalDateTime startDate, LocalDateTime endDate) {
         return orderRepository.findByDateCommandeBetween(startDate, endDate).stream()
-                .map(this::mapToResponse)
-                .collect(Collectors.toList());
+                .map(orderMapper::toResponse).collect(Collectors.toList());
     }
 
-    // --- WRITE OPERATIONS (Consume DTO, Return DTO) ---
+    // --- CORE BUSINESS LOGIC (Create, Confirm, Cancel) ---
 
+    // Requirement: EF 4 (Create Order)
     @Transactional
     public OrderResponse createOrderFlow(OrderCreateRequest request) {
-        // 1. Fetch Client
         Client client = clientRepository.findById(request.getClientId())
-                .orElseThrow(() -> new ResourceNotFoundException("Client not found with ID: " + request.getClientId()));
+                .orElseThrow(() -> new ResourceNotFoundException("Client not found"));
 
-        // 2. Initialize Order (Empty initially)
         Order order = new Order();
         order.setClient(client);
         order.setStatus(OrderStatus.PENDING);
-        order.setPromoCodeId(request.getPromoCode());
         order.setDateCommande(request.getOrderDate() != null ? request.getOrderDate() : LocalDateTime.now());
 
-        // Initialize values to 0 to avoid DB null errors
-        order.setSousTotalHT(BigDecimal.ZERO);
-        order.setMontantRemiseTotale(BigDecimal.ZERO);
-        order.setTauxTVA(new BigDecimal("20.0")); // Default TVA
-        order.calculateTotals();
-
-        // Save initial order to generate ID
+        // Save first to generate ID
         order = orderRepository.save(order);
 
-        // 3. Process Items
         BigDecimal sousTotal = BigDecimal.ZERO;
         List<OrderItem> createdItems = new ArrayList<>();
 
-        for (OrderItemRequest itemDto : request.getItems()) {
-            Product product = productRepository.findById(itemDto.getProductId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Product not found with ID: " + itemDto.getProductId()));
+        // Inside createOrderFlow method...
 
+        for (OrderItemRequest itemDto : request.getItems()) {
+            // 1. Check Stock
+            if (!productService.checkStock(itemDto.getProductId(), itemDto.getQuantite())) {
+                throw new BusinessValidationException("Insufficient stock for product ID: " + itemDto.getProductId());
+            }
+
+            // 2. Fetch Product (To get the REAL Price)
+            Product product = productRepository.findById(itemDto.getProductId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Product not found"));
+
+            // 3. Create Item using PRODUCT PRICE, not DTO price
             OrderItem orderItem = orderItemService.create(
                     order,
                     product,
                     itemDto.getQuantite(),
-                    itemDto.getPrixUnitaireHT()
+                    product.getPrixUnitaireHT() // <--- CHANGE THIS: Use product.getPrixUnitaireHT()
             );
 
             createdItems.add(orderItem);
             sousTotal = sousTotal.add(orderItem.getTotalLigne());
         }
 
-        // 4. Update Order with real totals
+        order.setOrderItems(createdItems);
         order.setSousTotalHT(sousTotal);
-        order.setOrderItems(createdItems); // Ensure items are linked in memory for the response mapping
-        order.calculateTotals();
 
-        // 5. Save Final State
-        Order savedOrder = orderRepository.save(order);
-        return mapToResponse(savedOrder);
+        // Requirement: EF 4 (Apply Discounts & VAT)
+        applyDiscountsAndCalculateTotal(order, request.getPromoCode());
+
+        return orderMapper.toResponse(orderRepository.save(order));
     }
 
+    private void applyDiscountsAndCalculateTotal(Order order, String promoCodeInput) {
+        BigDecimal discountTotal = BigDecimal.ZERO;
+
+        // 1. Loyalty Discount
+        BigDecimal loyaltyDiscount = calculateLoyaltyDiscount(order.getClient(), order.getSousTotalHT());
+        discountTotal = discountTotal.add(loyaltyDiscount);
+
+        // 2. Promo Code Discount
+        if (promoCodeInput != null && !promoCodeInput.isEmpty()) {
+            BigDecimal promoDiscount = promoCodeService.calculateDiscount(promoCodeInput, order.getSousTotalHT());
+            if (promoDiscount.compareTo(BigDecimal.ZERO) > 0) {
+                order.setPromoCodeId(promoCodeInput);
+                discountTotal = discountTotal.add(promoDiscount);
+            }
+        }
+
+        order.setMontantRemiseTotale(discountTotal);
+        order.setTauxTVA(new BigDecimal("20.0")); // Default 20%
+        order.calculateTotals(); // Calculates HT after discount, TVA, TTC
+    }
+
+    private BigDecimal calculateLoyaltyDiscount(Client client, BigDecimal amount) {
+        // Requirement: EF 2 (Loyalty System)
+        switch (client.getTier()) {
+            case SILVER: return amount.compareTo(new BigDecimal("500")) >= 0 ? amount.multiply(new BigDecimal("0.05")) : BigDecimal.ZERO;
+            case GOLD: return amount.compareTo(new BigDecimal("800")) >= 0 ? amount.multiply(new BigDecimal("0.10")) : BigDecimal.ZERO;
+            case PLATINUM: return amount.compareTo(new BigDecimal("1200")) >= 0 ? amount.multiply(new BigDecimal("0.15")) : BigDecimal.ZERO;
+            default: return BigDecimal.ZERO;
+        }
+    }
+
+    // Requirement: EF 4 (Confirm Order - Validation par ADMIN)
     @Transactional
     public OrderResponse confirmOrder(Long orderId) {
         Order order = findOrderEntityById(orderId);
 
         if (order.getStatus() != OrderStatus.PENDING) {
-            throw new BusinessValidationException("Only PENDING orders can be confirmed. Current: " + order.getStatus());
+            throw new BusinessValidationException("Only PENDING orders can be confirmed.");
         }
+        // Requirement: EF 5 (Payment Complete Check)
         if (order.getMontantRestant().compareTo(BigDecimal.ZERO) > 0) {
-            throw new BusinessValidationException("Payment incomplete. Remaining: " + order.getMontantRestant());
+            throw new BusinessValidationException("Cannot confirm: Payment incomplete. Remaining: " + order.getMontantRestant());
+        }
+
+        // Requirement: EF 4 (Update Stock & Stats)
+        for (OrderItem item : order.getOrderItems()) {
+            productService.updateStock(item.getProduct().getId(), item.getQuantite());
+        }
+        clientService.updateClientStatsAndTier(order.getClient(), order.getTotalTTC());
+
+        // Mark promo code used if applicable
+        if(order.getPromoCodeId() != null) {
+            promoCodeService.markAsUsed(order.getPromoCodeId());
         }
 
         order.setStatus(OrderStatus.CONFIRMED);
         order.setConfirmedAt(LocalDateTime.now());
-
-        return mapToResponse(orderRepository.save(order));
+        return orderMapper.toResponse(orderRepository.save(order));
     }
 
+    // Requirement: EF 4 (Cancel Order)
     @Transactional
     public OrderResponse cancelOrder(Long orderId) {
         Order order = findOrderEntityById(orderId);
-
-        if (order.getStatus() == OrderStatus.CONFIRMED || order.getStatus() == OrderStatus.REJECTED) {
-            throw new BusinessValidationException("Cannot cancel order. It is already " + order.getStatus());
+        if (order.getStatus() == OrderStatus.CONFIRMED) {
+            // Requirement: "Statuts finaux... aucune modification possible" implies cancelled from Pending mostly.
+            // But if logic allows cancelling confirmed, we must restore stock.
+            // "CANCELED : annulée manuellement par ADMIN (uniquement si PENDING)" -> Strict rule in EF 4.
+            if (order.getStatus() != OrderStatus.PENDING) {
+                throw new BusinessValidationException("Only PENDING orders can be cancelled.");
+            }
         }
-
         order.setStatus(OrderStatus.CANCELLED);
-        return mapToResponse(orderRepository.save(order));
+        return orderMapper.toResponse(orderRepository.save(order));
     }
 
-    @Transactional
-    public void applyPromoCode(Long orderId, String promoCode) {
-        Order order = findOrderEntityById(orderId);
-        if (order.getStatus() != OrderStatus.PENDING) {
-            throw new BusinessValidationException("Promo codes can only be applied to PENDING orders.");
-        }
-        order.setPromoCodeId(promoCode);
-        orderRepository.save(order);
-    }
-
+    // Helper for PaymentService
     @Transactional
     public void updatePaymentAmount(Long orderId, BigDecimal paymentAmount) {
         Order order = findOrderEntityById(orderId);
         BigDecimal newRestant = order.getMontantRestant().subtract(paymentAmount);
-
-        if (newRestant.compareTo(BigDecimal.ZERO) < 0) {
-            newRestant = BigDecimal.ZERO;
-        }
+        if (newRestant.compareTo(BigDecimal.ZERO) < 0) newRestant = BigDecimal.ZERO;
         order.setMontantRestant(newRestant);
         orderRepository.save(order);
     }
 
+    // Helper to apply promo (if needed separately, though usually done at Create)
     @Transactional
-    public void deleteById(Long id) {
-        if (!orderRepository.existsById(id)) {
-            throw new ResourceNotFoundException("Cannot delete. Order not found with ID: " + id);
-        }
-        orderRepository.deleteById(id);
+    public void applyPromoCode(Long orderId, String promoCode) {
+        Order order = findOrderEntityById(orderId);
+        applyDiscountsAndCalculateTotal(order, promoCode);
+        orderRepository.save(order);
     }
 
-    // --- ANALYTICS (Primitive types, no change needed) ---
-
+    // Analytics Helpers
     @Transactional(readOnly = true)
     public BigDecimal getTotalOrderValue(Long clientId) {
-        List<Order> orders = orderRepository.findByClientId(clientId);
-        if (orders == null || orders.isEmpty()) return BigDecimal.ZERO;
-        return orders.stream().map(Order::getTotalTTC).reduce(BigDecimal.ZERO, BigDecimal::add);
+        return orderRepository.findByClientId(clientId).stream()
+                .map(Order::getTotalTTC).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     @Transactional(readOnly = true)
@@ -196,60 +220,14 @@ public class OrderService {
         return orderRepository.countByClientId(clientId);
     }
 
-    // --- INTERNAL HELPER METHODS ---
+    // For internal use
+    public void deleteById(Long id) {
+        // Only if absolutely necessary for cleanup of empty/test orders
+        orderRepository.deleteById(id);
+    }
 
-    // Keep this private to fetch entity internally
     private Order findOrderEntityById(Long id) {
         return orderRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found with ID: " + id));
-    }
-
-    // --- MAPPING LOGIC (Entity -> DTO) ---
-    // You can move this to a dedicated Mapper class (e.g., MapStruct) later
-
-    private OrderResponse mapToResponse(Order order) {
-        OrderResponse response = new OrderResponse();
-        response.setId(order.getId());
-        response.setClientId(order.getClient().getId());
-        // response.setClientTierAtOrder(order.getClient().getTier()); // If available
-
-        // Calculated Totals
-        response.setSousTotal(order.getSousTotalHT());
-        response.setMontantRemise(order.getMontantRemiseTotale());
-        response.setMontantHTApresRemise(order.getSousTotalHT().subtract(order.getMontantRemiseTotale()));
-        response.setTauxTVA(order.getTauxTVA());
-        // response.setMontantTVA(order.getMontantTVA()); // If field exists or calculate it
-        response.setTotalTTC(order.getTotalTTC());
-        response.setMontantRestant(order.getMontantRestant());
-
-        // Status & Dates
-        response.setStatus(order.getStatus());
-        response.setCodePromo(order.getPromoCodeId());
-        response.setDateCommande(order.getDateCommande());
-        // response.setCreatedAt(order.getCreatedAt()); // Assuming Auditable entity
-        // response.setUpdatedAt(order.getUpdatedAt());
-        response.setConfirmedAt(order.getConfirmedAt());
-
-        // Items
-        if (order.getOrderItems() != null) {
-            List<OrderItemResponse> itemResponses = order.getOrderItems().stream()
-                    .map(this::mapItemToResponse)
-                    .collect(Collectors.toList());
-            response.setItems(itemResponses);
-        }
-
-        return response;
-    }
-
-    private OrderItemResponse mapItemToResponse(OrderItem item) {
-        OrderItemResponse response = new OrderItemResponse();
-        // Assuming OrderItemResponse has these fields based on standard logic
-        // You might need to adjust field names to match your OrderItemResponse exactly
-        response.setProductId(item.getProduct().getId());
-        response.setProductName(item.getProduct().getNom()); // Assuming fetch logic
-        response.setQuantite(item.getQuantite());
-        response.setPrixUnitaireHT(item.getPrixUnitaireHT());
-        response.setTotalLigne(item.getTotalLigne());
-        return response;
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
     }
 }
