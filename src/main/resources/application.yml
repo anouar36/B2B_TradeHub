@@ -1,0 +1,35 @@
+spring:
+    application:
+        name: B2B_TradeHub
+
+    # Configuration de la Source de Donnees (DataSource)
+    datasource:
+        driver-class-name: org.postgresql.Driver
+        # Utilise la variable d'environnement SPRING_DATASOURCE_URL
+        # ou se rabat sur la valeur localhost (b2b_tradehub_db)
+        url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/b2b_tradehub_db}
+        username: ${SPRING_DATASOURCE_USERNAME:postgres}
+        password: ${SPRING_DATASOURCE_PASSWORD:anwar36flow}
+
+    # Configuration JPA / Hibernate
+    jpa:
+        hibernate:
+            # Utilise la variable d'environnement SPRING_JPA_HIBERNATE_DDL_AUTO
+            ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
+
+        # Utilise la variable d'environnement SPRING_JPA_SHOW_SQL
+        show-sql: ${SPRING_JPA_SHOW_SQL:true}
+        properties:
+            hibernate:
+                # Utilise la variable d'environnement SPRING_JPA_DIALECT
+                dialect: ${SPRING_JPA_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+
+    # Configuration des Outils de Developpement
+    devtools:
+        restart:
+            enabled: true
+            additional-paths: src/main/java
+            exclude: static/**,public/**
+        livereload:
+            enabled: true
+        add-properties: true

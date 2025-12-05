@@ -3,7 +3,7 @@ version: "3.9"
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: digital_logistics_db
+    container_name: b2b_tradehub_db
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -13,7 +13,7 @@ services:
     ports:
       - "${POSTGRES_PORT}:5432"
     networks:
-      - logistics-net
+      - b2b-tradehub-net
   pgadmin:
     image: dpage/pgadmin4:8.4
     container_name: pgadmin_ui
@@ -25,44 +25,13 @@ services:
     depends_on:
       - postgres
     networks:
-      - logistics-net
+      - b2b-tradehub-net
     volumes:
       - pgadmin_data:/var/lib/pgadmin
-  sonarqube_db:
-    image: postgres:16-alpine
-    container_name: sonarqube_postgres_db
-    environment:
-      POSTGRES_USER: sonar
-      POSTGRES_PASSWORD: sonar
-      POSTGRES_DB: sonarqube
-    volumes:
-      - sonar_pg_data:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"
-    networks:
-      - logistics-net
-
-  sonarqube:
-    image: sonarqube:10.4-community
-    container_name: sonarqube_ci
-    environment:
-      SONAR_JDBC_URL: jdbc:postgresql://sonarqube_db:5432/sonarqube
-      SONAR_JDBC_USERNAME: sonar
-      SONAR_JDBC_PASSWORD: sonar
-    ports:
-      - "9000:9000"
-    depends_on:
-      - sonarqube_db
-    networks:
-      - logistics-net
-    volumes:
-      - sonarqube_data:/opt/sonarqube/data
-      - sonarqube_extensions:/opt/sonarqube/extensions
-      - sonarqube_logs:/opt/sonarqube/logs
 
   app:
     build: .
-    container_name: digital_logistics_app
+    container_name: B2B_TradeHub_app
     depends_on:
       - postgres
     environment:
@@ -76,7 +45,7 @@ services:
     ports:
       - "${SERVER_PORT}:${SERVER_PORT}"
     networks:
-      - logistics-net
+      - b2b-tradehub-net
     volumes:
       - .:/app
 
@@ -89,5 +58,5 @@ volumes:
   sonarqube_logs:
 
 networks:
-  logistics-net:
+  b2b-tradehub-net:
 

@@ -17,7 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Component
 @RequiredArgsConstructor
-public class DataLoader implements CommandLineRunner {
+public class    DataLoader implements CommandLineRunner {
 
     private final UserRepository userRepository; // Used only for existence check
     private final UserService userService;

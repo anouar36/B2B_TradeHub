@@ -1,6 +1,5 @@
 package com.logitrack.b2b_tradehub.controller;
 
-
 import com.logitrack.b2b_tradehub.dto.client.ClientCreateRequest;
 import com.logitrack.b2b_tradehub.dto.client.ClientResponse;
 import com.logitrack.b2b_tradehub.dto.client.ClientUpdateRequest;
@@ -8,7 +7,6 @@ import com.logitrack.b2b_tradehub.dto.order.OrderResponse;
 import com.logitrack.b2b_tradehub.entity.enums.UserRole;
 import com.logitrack.b2b_tradehub.service.ClientService;
 import com.logitrack.b2b_tradehub.util.AuthUtil;
-
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -25,9 +23,7 @@ public class ClientController {
 
     private final ClientService clientService;
 
-    /**
-     * POST /api/clients - Créer un client (ADMIN only)
-     */
+    // Requirement: Créer un client
     @PostMapping
     public ResponseEntity<ClientResponse> createClient(@Valid @RequestBody ClientCreateRequest request, HttpSession session) {
         AuthUtil.checkRole(session, UserRole.ADMIN);
@@ -35,39 +31,28 @@ public class ClientController {
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
-    /**
-     * GET /api/clients - Lister tous les clients (ADMIN only)
-     */
+    // Requirement: Consulter les informations (List)
     @GetMapping
     public ResponseEntity<List<ClientResponse>> getAllClients(HttpSession session) {
         AuthUtil.checkRole(session, UserRole.ADMIN);
-        List<ClientResponse> clients = clientService.findAll();
-        return ResponseEntity.ok(clients);
+        return ResponseEntity.ok(clientService.findAll());
     }
 
-    /**
-     * GET /api/clients/{id} - Consulter un client (ADMIN / CLIENT self)
-     */
+    // Requirement: Consulter les informations d'un client (Specific)
     @GetMapping("/{id}")
     public ResponseEntity<ClientResponse> getClientById(@PathVariable Long id, HttpSession session) {
         AuthUtil.checkClientOrAdmin(session, id);
-        ClientResponse response = clientService.findById(id);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(clientService.findById(id));
     }
 
-    /**
-     * PUT /api/clients/{id} - Mettre à jour un client (ADMIN / CLIENT self)
-     */
+    // Requirement: Mettre à jour les données d’un client
     @PutMapping("/{id}")
     public ResponseEntity<ClientResponse> updateClient(@PathVariable Long id, @Valid @RequestBody ClientUpdateRequest request, HttpSession session) {
         AuthUtil.checkClientOrAdmin(session, id);
-        ClientResponse response = clientService.updateClient(id, request);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(clientService.updateClient(id, request));
     }
 
-    /**
-     * DELETE /api/clients/{id} - Suppression d’un client (ADMIN only)
-     */
+    // Requirement: Suppression d’un client
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteClient(@PathVariable Long id, HttpSession session) {
         AuthUtil.checkRole(session, UserRole.ADMIN);
@@ -75,13 +60,10 @@ public class ClientController {
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * GET /api/clients/{id}/orders - Historique des commandes (ADMIN / CLIENT self)
-     */
+    // Requirement: Consulter l'historique des commandes
     @GetMapping("/{id}/orders")
     public ResponseEntity<List<OrderResponse>> getClientOrderHistory(@PathVariable Long id, HttpSession session) {
         AuthUtil.checkClientOrAdmin(session, id);
-        List<OrderResponse> orders = clientService.findOrderHistory(id);
-        return ResponseEntity.ok(orders);
+        return ResponseEntity.ok(clientService.findOrderHistory(id));
     }
 }

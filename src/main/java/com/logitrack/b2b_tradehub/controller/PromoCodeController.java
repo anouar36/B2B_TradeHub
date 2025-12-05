@@ -1,17 +1,16 @@
 package com.logitrack.b2b_tradehub.controller;
 
-import com.logitrack.b2b_tradehub.entity.PromoCode;
+import com.logitrack.b2b_tradehub.dto.PromoCode.PromoCodeRequest;
+import com.logitrack.b2b_tradehub.dto.PromoCode.PromoCodeResponse;
 import com.logitrack.b2b_tradehub.service.PromoCodeService;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import jakarta.validation.Valid;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/promo-codes")
@@ -22,93 +21,35 @@ public class PromoCodeController {
     private PromoCodeService promoCodeService;
 
     @GetMapping
-    public ResponseEntity<List<PromoCode>> getAllPromoCodes() {
-        List<PromoCode> promoCodes = promoCodeService.findAll();
-        return ResponseEntity.ok(promoCodes);
-    }
-
-    @GetMapping("/{id}")
-    public ResponseEntity<PromoCode> getPromoCodeById(@PathVariable Long id) {
-        Optional<PromoCode> promoCode = promoCodeService.findById(id);
-        return promoCode.map(ResponseEntity::ok)
-                        .orElse(ResponseEntity.notFound().build());
+    public ResponseEntity<List<PromoCodeResponse>> getAllPromoCodes() {
+        return ResponseEntity.ok(promoCodeService.findAllResponse());
     }
 
     @GetMapping("/code/{code}")
-    public ResponseEntity<PromoCode> getPromoCodeByCode(@PathVariable String code) {
-        Optional<PromoCode> promoCode = promoCodeService.findByCode(code);
-        return promoCode.map(ResponseEntity::ok)
-                        .orElse(ResponseEntity.notFound().build());
-    }
-
-    @GetMapping("/active")
-    public ResponseEntity<List<PromoCode>> getActivePromoCodes() {
-        List<PromoCode> promoCodes = promoCodeService.findActivePromoCodes();
-        return ResponseEntity.ok(promoCodes);
-    }
-
-    @GetMapping("/valid")
-    public ResponseEntity<List<PromoCode>> getValidPromoCodes() {
-        List<PromoCode> promoCodes = promoCodeService.findValidPromoCodes(LocalDate.now());
-        return ResponseEntity.ok(promoCodes);
+    public ResponseEntity<PromoCodeResponse> getPromoCodeByCode(@PathVariable String code) {
+        return ResponseEntity.ok(promoCodeService.findByCodeResponse(code));
     }
 
     @PostMapping
-    public ResponseEntity<PromoCode> createPromoCode(@Valid @RequestBody PromoCode promoCode) {
-        PromoCode savedPromoCode = promoCodeService.save(promoCode);
-        return ResponseEntity.status(HttpStatus.CREATED).body(savedPromoCode);
+    public ResponseEntity<PromoCodeResponse> createPromoCode(@Valid @RequestBody PromoCodeRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(promoCodeService.create(request));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<PromoCode> updatePromoCode(@PathVariable Long id, @Valid @RequestBody PromoCode promoCodeDetails) {
-        Optional<PromoCode> promoCodeOpt = promoCodeService.findById(id);
-        if (promoCodeOpt.isPresent()) {
-            PromoCode promoCode = promoCodeOpt.get();
-            promoCode.setCode(promoCodeDetails.getCode());
-            promoCode.setDiscountPercentage(promoCodeDetails.getDiscountPercentage());
-            promoCode.setValidFrom(promoCodeDetails.getValidFrom());
-            promoCode.setValidUntil(promoCodeDetails.getValidUntil());
-            promoCode.setUsageUnique(promoCodeDetails.getUsageUnique());
-            promoCode.setActive(promoCodeDetails.getActive());
-            PromoCode updatedPromoCode = promoCodeService.save(promoCode);
-            return ResponseEntity.ok(updatedPromoCode);
-        }
-        return ResponseEntity.notFound().build();
+    public ResponseEntity<PromoCodeResponse> updatePromoCode(@PathVariable Long id, @Valid @RequestBody PromoCodeRequest request) {
+        return ResponseEntity.ok(promoCodeService.update(id, request));
     }
 
-    @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deletePromoCode(@PathVariable Long id) {
-        if (promoCodeService.findById(id).isPresent()) {
-            promoCodeService.deleteById(id);
-            return ResponseEntity.noContent().build();
-        }
-        return ResponseEntity.notFound().build();
-    }
-
-    @GetMapping("/validate/{code}")
-    public ResponseEntity<Boolean> validatePromoCode(@PathVariable String code) {
-        boolean isValid = promoCodeService.isPromoCodeValid(code);
-        return ResponseEntity.ok(isValid);
-    }
-
-    @GetMapping("/calculate-discount/{code}")
-    public ResponseEntity<BigDecimal> calculateDiscount(@PathVariable String code, @RequestParam BigDecimal orderAmount) {
-        BigDecimal discount = promoCodeService.calculateDiscount(code, orderAmount);
-        return ResponseEntity.ok(discount);
-    }
-
-    @PatchMapping("/mark-used/{code}")
-    public ResponseEntity<Void> markPromoCodeAsUsed(@PathVariable String code) {
-        promoCodeService.markAsUsed(code);
+    // Requirement: Soft Delete / Deactivation
+    @PatchMapping("/{id}/deactivate")
+    public ResponseEntity<Void> deactivatePromoCode(@PathVariable Long id) {
+        promoCodeService.deactivatePromoCode(id);
         return ResponseEntity.ok().build();
     }
 
-    @PatchMapping("/{id}/deactivate")
-    public ResponseEntity<Void> deactivatePromoCode(@PathVariable Long id) {
-        if (promoCodeService.findById(id).isPresent()) {
-            promoCodeService.deactivatePromoCode(id);
-            return ResponseEntity.ok().build();
-        }
-        return ResponseEntity.notFound().build();
+    // Helper for Frontend/Validation
+    @GetMapping("/calculate-discount/{code}")
+    public ResponseEntity<BigDecimal> calculateDiscount(@PathVariable String code, @RequestParam BigDecimal orderAmount) {
+        return ResponseEntity.ok(promoCodeService.calculateDiscount(code, orderAmount));
     }
 }
